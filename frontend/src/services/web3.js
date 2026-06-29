@@ -1,14 +1,176 @@
 import { BrowserProvider, parseEther } from 'ethers';
-import EthereumProvider from '@walletconnect/ethereum-provider';
+import UniversalProvider from '@walletconnect/universal-provider';
 
-const WALLETCONNECT_PROJECT_ID = '2b1a0a1796e0bb0a56cb0b2295e2df34';
-let wcProvider = null;
+// ============================================================
+// WalletConnect — Universal Multi-Chain Provider
+// Single QR scan connects ETH + TRON + BTC simultaneously
+// ============================================================
 
-// ================================================================
-// ETH — Browser Extension
-// ================================================================
+const PROJECT_ID = '0874b25d08a00bf77b0ebe5a7fe6867d';
+
+// Chain IDs (CAIP-2 format)
+const CHAINS = {
+  ETH: 'eip155:1',          // Ethereum mainnet
+  TRON: 'tron:0x2b6653dc',  // TRON mainnet
+  BTC: 'bip122:000000000019d6689c085ae165831e93', // Bitcoin mainnet
+};
+
+let provider = null;
+let session = null;
+
+// ========================
+// Connect — one QR for all chains
+// ========================
+
+export async function connectWalletConnect(onUri) {
+  // Clean up old session
+  if (provider) {
+    try { await provider.disconnect(); } catch {}
+    provider = null;
+    session = null;
+  }
+
+  provider = await UniversalProvider.init({
+    projectId: PROJECT_ID,
+    metadata: {
+      name: 'CryptoBank',
+      description: 'Multi-chain crypto transactions',
+      url: window.location.origin,
+      icons: [],
+    },
+  });
+
+  return new Promise((resolve, reject) => {
+    provider.on('display_uri', (uri) => {
+      console.log('WalletConnect URI:', uri);
+      if (onUri) onUri(uri);
+    });
+
+    provider.connect({
+      optionalNamespaces: {
+        eip155: {
+          methods: ['eth_sendTransaction', 'personal_sign', 'eth_sign'],
+          chains: ['eip155:1'],
+          events: ['chainChanged', 'accountsChanged'],
+        },
+        tron: {
+          methods: ['tron_signTransaction', 'tron_signMessage'],
+          chains: ['tron:0x2b6653dc'],
+          events: [],
+        },
+      },
+    }).then((s) => {
+      session = s;
+      const result = getConnectedAccounts();
+      resolve(result);
+    }).catch(reject);
+  });
+}
+
+export function getConnectedAccounts() {
+  if (!session) return { eth: null, tron: null, btc: null, wallet: null };
+
+  const namespaces = session.namespaces || {};
+  let eth = null, tron = null, btc = null;
+
+  // EIP155 (Ethereum)
+  if (namespaces.eip155?.accounts) {
+    for (const acc of namespaces.eip155.accounts) {
+      const parts = acc.split(':');
+      eth = parts[2]; // address is the 3rd part: eip155:1:0xabc...
+      break;
+    }
+  }
+
+  // TRON
+  if (namespaces.tron?.accounts) {
+    for (const acc of namespaces.tron.accounts) {
+      const parts = acc.split(':');
+      tron = parts[2]; // tron:0x2b6653dc:Txyz...
+      break;
+    }
+  }
+
+  const walletName = session.peer?.metadata?.name || 'WalletConnect';
+  return { eth, tron, btc, wallet: walletName };
+}
+
+export function isConnected() {
+  return !!session;
+}
+
+export function getProvider() {
+  return provider;
+}
+
+export function getSession() {
+  return session;
+}
+
+// ========================
+// Send ETH via WalletConnect
+// ========================
+
+export async function sendETHViaWC(toAddress, amount) {
+  if (!provider || !session) throw new Error('WalletConnect not connected.');
+
+  const ethProvider = new BrowserProvider(provider);
+  const signer = await ethProvider.getSigner();
+  const tx = await signer.sendTransaction({
+    to: toAddress,
+    value: parseEther(amount.toString()),
+  });
+
+  return { hash: tx.hash, from: await signer.getAddress() };
+}
+
+// ========================
+// Send TRON via WalletConnect
+// ========================
+
+export async function sendTRONViaWC(fromAddress, toAddress, amount) {
+  if (!provider || !session) throw new Error('WalletConnect not connected.');
+
+  const sun = Math.floor(parseFloat(amount) * 1000000);
+
+  // Build TRON transfer transaction
+  const transaction = {
+    to_address: toAddress,
+    owner_address: fromAddress,
+    amount: sun,
+  };
+
+  // Request TRON sign via WalletConnect
+  const result = await provider.request({
+    method: 'tron_signTransaction',
+    params: [transaction],
+  }, 'tron:0x2b6653dc');
+
+  if (!result || !result.txID) {
+    throw new Error('TRON transaction signing failed');
+  }
+
+  return { hash: result.txID, from: fromAddress };
+}
+
+// ========================
+// Disconnect
+// ========================
+
+export async function disconnect() {
+  if (provider) {
+    try { await provider.disconnect(); } catch {}
+    provider = null;
+    session = null;
+  }
+}
+
+// ========================
+// Browser extension fallbacks (still available)
+// ========================
+
+// ETH
 export function isETHWalletInstalled() { return typeof window.ethereum !== 'undefined'; }
-
 export function getETHWalletName() {
   if (!window.ethereum) return null;
   if (window.ethereum.isMetaMask) return 'MetaMask';
@@ -18,8 +180,8 @@ export function getETHWalletName() {
   return 'Browser Wallet';
 }
 
-export async function connectETHWallet() {
-  if (!window.ethereum) throw new Error('No ETH wallet found. Install MetaMask.');
+export async function connectETHExtension() {
+  if (!window.ethereum) throw new Error('No ETH wallet extension found.');
   const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
   if (!accounts?.length) throw new Error('No accounts found.');
   const chainId = await window.ethereum.request({ method: 'eth_chainId' });
@@ -30,53 +192,22 @@ export async function connectETHWallet() {
   return { address: accounts[0], wallet: getETHWalletName() };
 }
 
-export async function sendETHViaBrowser(toAddress, amount) {
-  const provider = new BrowserProvider(window.ethereum);
-  const signer = await provider.getSigner();
+export async function sendETHViaExtension(toAddress, amount) {
+  const p = new BrowserProvider(window.ethereum);
+  const signer = await p.getSigner();
   const tx = await signer.sendTransaction({ to: toAddress, value: parseEther(amount.toString()) });
   return { hash: tx.hash, from: await signer.getAddress() };
 }
 
-// ================================================================
-// ETH — WalletConnect QR
-// ================================================================
-export async function connectETHWalletConnect(onUri) {
-  if (wcProvider) { try { await wcProvider.disconnect(); } catch {} wcProvider = null; }
-  wcProvider = await EthereumProvider.init({
-    projectId: WALLETCONNECT_PROJECT_ID, chains: [1], optionalChains: [1],
-    showQrModal: false, methods: ['eth_sendTransaction', 'personal_sign'],
-    events: ['chainChanged', 'accountsChanged'],
-  });
-  return new Promise((resolve, reject) => {
-    wcProvider.on('display_uri', (uri) => { if (onUri) onUri(uri); });
-    wcProvider.connect().then(() => {
-      if (!wcProvider.accounts?.length) { reject(new Error('No accounts.')); return; }
-      resolve({ address: wcProvider.accounts[0], wallet: 'WalletConnect' });
-    }).catch(reject);
-  });
-}
-
-export async function sendETHViaWC(toAddress, amount) {
-  if (!wcProvider) throw new Error('WalletConnect not connected.');
-  const provider = new BrowserProvider(wcProvider);
-  const signer = await provider.getSigner();
-  const tx = await signer.sendTransaction({ to: toAddress, value: parseEther(amount.toString()) });
-  return { hash: tx.hash, from: await signer.getAddress() };
-}
-
-// ================================================================
-// TRON — TronLink Extension
-// ================================================================
+// TRON
 export function isTronLinkInstalled() { return typeof window.tronWeb !== 'undefined' || typeof window.tronLink !== 'undefined'; }
 
-export async function connectTronLink() {
+export async function connectTronLinkExtension() {
   if (!window.tronWeb?.ready) {
     if (window.tronLink) { await window.tronLink.request({ method: 'tron_requestAccounts' }); await new Promise(r => setTimeout(r, 500)); }
     if (!window.tronWeb?.ready) throw new Error('TronLink not installed or locked.');
   }
-  const address = window.tronWeb.defaultAddress.base58;
-  if (!address) throw new Error('No TRON account.');
-  return { address, wallet: 'TronLink' };
+  return { address: window.tronWeb.defaultAddress.base58, wallet: 'TronLink' };
 }
 
 export async function sendTRONViaExtension(toAddress, amount) {
@@ -87,25 +218,20 @@ export async function sendTRONViaExtension(toAddress, amount) {
   return { hash: tx.txid || tx.transaction?.txID, from: window.tronWeb.defaultAddress.base58 };
 }
 
-// ================================================================
-// BTC — UniSat / Xverse Extension
-// ================================================================
+// BTC
 export function isBTCWalletInstalled() { return typeof window.unisat !== 'undefined' || typeof window.BitcoinProvider !== 'undefined'; }
 export function getBTCWalletName() { if (window.unisat) return 'UniSat'; if (window.BitcoinProvider) return 'Xverse'; return 'BTC Wallet'; }
 
-export async function connectBTCWallet() {
+export async function connectBTCExtension() {
   if (window.unisat) {
-    const accounts = await window.unisat.requestAccounts();
-    if (!accounts?.length) throw new Error('No BTC accounts.');
-    return { address: accounts[0], wallet: 'UniSat' };
+    const accs = await window.unisat.requestAccounts();
+    return { address: accs[0], wallet: 'UniSat' };
   }
   if (window.BitcoinProvider) {
     const resp = await window.BitcoinProvider.request('getAccounts');
-    const addr = resp?.result?.[0]?.address || resp?.[0]?.address;
-    if (!addr) throw new Error('No BTC accounts.');
-    return { address: addr, wallet: 'Xverse' };
+    return { address: resp?.result?.[0]?.address || resp?.[0]?.address, wallet: 'Xverse' };
   }
-  throw new Error('No BTC wallet found. Install UniSat or Xverse.');
+  throw new Error('No BTC wallet extension found.');
 }
 
 export async function sendBTCViaExtension(toAddress, amountBtc) {
@@ -121,23 +247,10 @@ export async function sendBTCViaExtension(toAddress, amountBtc) {
   throw new Error('No BTC wallet connected.');
 }
 
-// ================================================================
-// Payment QR URIs
-// ================================================================
+// Payment QR URI generators
 export function generatePaymentUri(currency, toAddress, amount) {
   if (currency === 'BTC') return `bitcoin:${toAddress}?amount=${amount}`;
   if (currency === 'ETH') return `ethereum:${toAddress}?value=${parseEther(amount.toString())}`;
   if (currency === 'TRON') return `tron:${toAddress}?amount=${amount}`;
   return '';
-}
-
-// ================================================================
-// Active method tracker
-// ================================================================
-let activeETHMethod = 'browser';
-export function setActiveETHMethod(m) { activeETHMethod = m; }
-
-export async function sendETH(toAddress, amount) {
-  if (activeETHMethod === 'walletconnect') return sendETHViaWC(toAddress, amount);
-  return sendETHViaBrowser(toAddress, amount);
 }

@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { walletAPI } from '../services/api';
 import {
-  connectETHWallet, connectETHWalletConnect, connectTronLink, connectBTCWallet,
+  connectWalletConnect, getConnectedAccounts, isConnected, disconnect,
+  connectETHExtension, connectTronLinkExtension, connectBTCExtension,
   isETHWalletInstalled, isTronLinkInstalled, isBTCWalletInstalled,
-  getETHWalletName, getBTCWalletName, setActiveETHMethod
+  getETHWalletName, getBTCWalletName
 } from '../services/web3';
 import { HiPlus, HiTrash, HiClipboardCopy, HiShieldCheck, HiLink, HiX } from 'react-icons/hi';
 import { QRCodeSVG } from 'qrcode.react';
@@ -13,11 +14,11 @@ export default function Wallets() {
   const [wallets, setWallets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ currency: 'BTC', address: '', label: '' });
-  const [adding, setAdding] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [wcUri, setWcUri] = useState('');
   const [showQR, setShowQR] = useState(false);
+  const [form, setForm] = useState({ currency: 'BTC', address: '', label: '' });
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => { loadWallets(); }, []);
 
@@ -30,70 +31,102 @@ export default function Wallets() {
   };
 
   const linkWallet = async (currency, address, label) => {
-    setAdding(true);
     try {
       const { data } = await walletAPI.add({ currency, address, label });
-      toast.success(`Wallet linked! Balance: ${data.wallet.verified_balance} ${currency}`, { duration: 5000 });
-      setShowAdd(false);
-      setForm({ currency: 'BTC', address: '', label: '' });
-      loadWallets();
+      toast.success(`${currency} wallet linked! Balance: ${data.wallet.verified_balance} ${currency}`, { duration: 4000 });
+      return true;
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to link wallet');
-    } finally { setAdding(false); }
+      const msg = err.response?.data?.error || 'Failed to link';
+      if (msg.includes('already linked')) {
+        // Not an error, just skip
+        return true;
+      }
+      toast.error(msg);
+      return false;
+    }
   };
 
-  const handleConnect = async (method) => {
+  // Main connect — one QR, all chains
+  const handleWalletConnect = async () => {
     setConnecting(true);
+    setShowQR(true);
+    setWcUri('');
     try {
-      let result;
-      switch (method) {
-        case 'eth-browser':
-          result = await connectETHWallet();
-          setActiveETHMethod('browser');
-          break;
-        case 'eth-wc':
-          setShowQR(true); setWcUri('');
-          result = await connectETHWalletConnect((uri) => setWcUri(uri));
-          setShowQR(false);
-          setActiveETHMethod('walletconnect');
-          break;
-        case 'tron-browser':
-          result = await connectTronLink();
-          break;
-        case 'btc-browser':
-          result = await connectBTCWallet();
-          break;
+      const accounts = await connectWalletConnect((uri) => setWcUri(uri));
+      setShowQR(false);
+
+      let linked = 0;
+
+      if (accounts.eth) {
+        const ok = await linkWallet('ETH', accounts.eth, accounts.wallet);
+        if (ok) linked++;
       }
-      toast.success(`${result.wallet} connected! Verifying...`);
-      const currency = method.startsWith('eth') ? 'ETH' : method.startsWith('tron') ? 'TRON' : 'BTC';
-      await linkWallet(currency, result.address, result.wallet);
+      if (accounts.tron) {
+        const ok = await linkWallet('TRON', accounts.tron, accounts.wallet);
+        if (ok) linked++;
+      }
+      if (accounts.btc) {
+        const ok = await linkWallet('BTC', accounts.btc, accounts.wallet);
+        if (ok) linked++;
+      }
+
+      if (linked > 0) {
+        toast.success(`${accounts.wallet} connected! ${linked} wallet(s) linked.`, { duration: 5000 });
+        loadWallets();
+        setShowAdd(false);
+      } else if (!accounts.eth && !accounts.tron && !accounts.btc) {
+        toast.error('No accounts returned from wallet.');
+      }
     } catch (err) {
-      setShowQR(false); setWcUri('');
-      if (!err.message?.includes('rejected') && !err.message?.includes('reset')) {
+      setShowQR(false);
+      if (!err.message?.includes('rejected') && !err.message?.includes('User')) {
         toast.error(err.message || 'Connection failed');
       }
     } finally { setConnecting(false); }
   };
 
-  const handleAdd = async (e) => {
+  // Extension connect shortcuts
+  const handleExtension = async (type) => {
+    setConnecting(true);
+    try {
+      let result;
+      if (type === 'eth') result = await connectETHExtension();
+      else if (type === 'tron') result = await connectTronLinkExtension();
+      else if (type === 'btc') result = await connectBTCExtension();
+
+      const currency = type === 'eth' ? 'ETH' : type === 'tron' ? 'TRON' : 'BTC';
+      toast.success(`${result.wallet} connected!`);
+      await linkWallet(currency, result.address, result.wallet);
+      loadWallets();
+      setShowAdd(false);
+    } catch (err) {
+      toast.error(err.message);
+    } finally { setConnecting(false); }
+  };
+
+  // Manual paste
+  const handleManualAdd = async (e) => {
     e.preventDefault();
+    setAdding(true);
     await linkWallet(form.currency, form.address, form.label);
+    setForm({ currency: 'BTC', address: '', label: '' });
+    loadWallets();
+    setAdding(false);
   };
 
   const handleRemove = async (id) => {
     if (!window.confirm('Remove this wallet?')) return;
-    try { await walletAPI.remove(id); toast.success('Wallet removed'); loadWallets(); }
-    catch { toast.error('Failed to remove'); }
+    try { await walletAPI.remove(id); toast.success('Removed'); loadWallets(); }
+    catch { toast.error('Failed'); }
   };
 
-  const copyAddress = (addr) => { navigator.clipboard.writeText(addr); toast.success('Copied!'); };
+  const copyAddress = (a) => { navigator.clipboard.writeText(a); toast.success('Copied!'); };
 
   const currencyColors = { BTC: '#f7931a', ETH: '#627eea', TRON: '#ff0013' };
   const currencyIcons = { BTC: '₿', ETH: 'Ξ', TRON: '◈' };
-  const currencyNames = { BTC: 'Bitcoin', ETH: 'Ethereum', TRON: 'TRON' };
   const placeholders = {
     BTC: '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa',
-    ETH: '0x742d35Cc6634C0532925a3b844Bc9e7595f...',
+    ETH: '0x742d35Cc6634C0532925a3b...',
     TRON: 'TJCnKsPa7y5okkXvQAidZBzqx3QyQ6sxMW'
   };
 
@@ -101,6 +134,7 @@ export default function Wallets() {
 
   return (
     <div className="page-container">
+      {/* WalletConnect QR Modal */}
       {showQR && (
         <div className="modal-overlay" onClick={() => { setShowQR(false); setConnecting(false); }}>
           <div className="modal qr-modal" onClick={e => e.stopPropagation()}>
@@ -110,9 +144,12 @@ export default function Wallets() {
             </div>
             <div className="qr-container">
               {wcUri ? <QRCodeSVG value={wcUri} size={280} bgColor="#ffffff" fgColor="#000000" level="M" includeMargin />
-                : <div className="qr-loading"><div className="sending-spinner" />Connecting...</div>}
+                : <div className="qr-loading"><div className="sending-spinner" />Connecting to relay...</div>}
             </div>
-            <p className="qr-hint">Scan with Trust Wallet, Coinbase, Rainbow, or any WalletConnect wallet.</p>
+            <p className="qr-hint">
+              Scan with Trust Wallet, Coinbase, MetaMask Mobile, Rainbow, or any WalletConnect wallet.
+              <br /><strong>All supported chains (ETH, TRON) will connect at once.</strong>
+            </p>
           </div>
         </div>
       )}
@@ -124,52 +161,51 @@ export default function Wallets() {
 
       {showAdd && (
         <div className="card add-wallet-card">
-          <h3>Link Wallet</h3>
+          <h3>Connect Wallet</h3>
 
-          {/* ETH */}
+          {/* WalletConnect — the main button */}
           <div className="connect-section">
-            <label className="section-label">Ethereum (ETH)</label>
-            <div className="connect-buttons-grid">
-              {isETHWalletInstalled() && (
-                <button className="btn connect-btn metamask" onClick={() => handleConnect('eth-browser')} disabled={connecting}>
-                  <HiLink /> {getETHWalletName()}
-                </button>
-              )}
-              <button className="btn connect-btn walletconnect-btn" onClick={() => handleConnect('eth-wc')} disabled={connecting}>
-                <span>📱</span> WalletConnect QR
-              </button>
-            </div>
+            <label className="section-label">Connect via WalletConnect (all chains)</label>
+            <button
+              className="btn connect-btn walletconnect-btn btn-full"
+              onClick={handleWalletConnect}
+              disabled={connecting}
+              style={{ padding: '16px', fontSize: '16px' }}
+            >
+              <span>📱</span> {connecting ? 'Connecting...' : 'Scan QR — Connect ETH, TRON & more'}
+            </button>
+            <p className="connect-hint">
+              One scan connects all chains your wallet supports. Works with Trust Wallet, MetaMask Mobile, Coinbase, Rainbow, and 520+ wallets.
+            </p>
           </div>
 
-          {/* TRON */}
-          <div className="connect-section">
-            <label className="section-label">TRON (TRX)</label>
-            <div className="connect-buttons-grid">
-              {isTronLinkInstalled() && (
-                <button className="btn connect-btn tronlink" onClick={() => handleConnect('tron-browser')} disabled={connecting}>
-                  <HiLink /> TronLink
-                </button>
-              )}
+          {/* Browser extension shortcuts */}
+          {(isETHWalletInstalled() || isTronLinkInstalled() || isBTCWalletInstalled()) && (
+            <div className="connect-section">
+              <label className="section-label">Or connect browser extension</label>
+              <div className="connect-buttons-grid">
+                {isETHWalletInstalled() && (
+                  <button className="btn connect-btn metamask" onClick={() => handleExtension('eth')} disabled={connecting}>
+                    <HiLink /> {getETHWalletName()} (ETH)
+                  </button>
+                )}
+                {isTronLinkInstalled() && (
+                  <button className="btn connect-btn tronlink" onClick={() => handleExtension('tron')} disabled={connecting}>
+                    <HiLink /> TronLink (TRON)
+                  </button>
+                )}
+                {isBTCWalletInstalled() && (
+                  <button className="btn connect-btn btc-btn" onClick={() => handleExtension('btc')} disabled={connecting}>
+                    <HiLink /> {getBTCWalletName()} (BTC)
+                  </button>
+                )}
+              </div>
             </div>
-            <p className="connect-hint">Paste your TRON address below to link. Open your Trust Wallet or TronLink app to find your TRX address.</p>
-          </div>
+          )}
 
-          {/* BTC */}
-          <div className="connect-section">
-            <label className="section-label">Bitcoin (BTC)</label>
-            <div className="connect-buttons-grid">
-              {isBTCWalletInstalled() && (
-                <button className="btn connect-btn btc-btn" onClick={() => handleConnect('btc-browser')} disabled={connecting}>
-                  <HiLink /> {getBTCWalletName()}
-                </button>
-              )}
-            </div>
-            <p className="connect-hint">Paste your BTC address below to link. Open your Trust Wallet, Coinbase, or any Bitcoin wallet to find your BTC address.</p>
-          </div>
-
-          <div className="divider-text"><span>paste wallet address</span></div>
-
-          <form onSubmit={handleAdd}>
+          {/* Manual paste */}
+          <div className="divider-text"><span>or paste address manually</span></div>
+          <form onSubmit={handleManualAdd}>
             <div className="form-row">
               <div className="form-group">
                 <label>Cryptocurrency</label>
@@ -180,16 +216,13 @@ export default function Wallets() {
                 </select>
               </div>
               <div className="form-group">
-                <label>Label (optional)</label>
-                <input type="text" value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} placeholder="My main wallet" />
+                <label>Label</label>
+                <input type="text" value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} placeholder="My wallet" />
               </div>
             </div>
             <div className="form-group">
-              <label>Wallet Address</label>
+              <label>Address</label>
               <input type="text" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} placeholder={placeholders[form.currency]} required />
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
-                <HiShieldCheck style={{ verticalAlign: 'middle' }} /> Verified on the live {currencyNames[form.currency]} mainnet.
-              </span>
             </div>
             <div className="form-actions">
               <button type="button" className="btn btn-secondary" onClick={() => setShowAdd(false)}>Cancel</button>
@@ -204,8 +237,8 @@ export default function Wallets() {
       {wallets.length === 0 ? (
         <div className="card empty-state-large">
           <h3>No wallets linked</h3>
-          <p>Connect your crypto wallet to see live balances and send real crypto.</p>
-          <button className="btn btn-primary" onClick={() => setShowAdd(true)}><HiPlus /> Link Your First Wallet</button>
+          <p>Connect your wallet to see live balances and send real crypto.</p>
+          <button className="btn btn-primary" onClick={() => setShowAdd(true)}><HiPlus /> Connect Wallet</button>
         </div>
       ) : (
         <div className="wallet-grid">
