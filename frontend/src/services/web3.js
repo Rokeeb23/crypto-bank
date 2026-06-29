@@ -58,6 +58,11 @@ export async function connectWalletConnect(onUri) {
           chains: ['tron:0x2b6653dc'],
           events: [],
         },
+        bip122: {
+          methods: ['sendTransfer', 'getAccountAddresses', 'signPsbt', 'signMessage'],
+          chains: ['bip122:000000000019d6689c085ae165831e93'],
+          events: ['bip122_addressesChanged'],
+        },
       },
     }).then((s) => {
       session = s;
@@ -87,6 +92,16 @@ export function getConnectedAccounts() {
     for (const acc of namespaces.tron.accounts) {
       const parts = acc.split(':');
       tron = parts[2]; // tron:0x2b6653dc:Txyz...
+      break;
+    }
+  }
+
+  // BTC (bip122)
+  if (namespaces.bip122?.accounts) {
+    for (const acc of namespaces.bip122.accounts) {
+      // Format: bip122:000000000019d6689c085ae165831e93:bc1q...
+      const parts = acc.split(':');
+      btc = parts.slice(2).join(':'); // rejoin in case address has colons
       break;
     }
   }
@@ -151,6 +166,32 @@ export async function sendTRONViaWC(fromAddress, toAddress, amount) {
   }
 
   return { hash: result.txID, from: fromAddress };
+}
+
+// ========================
+// Send BTC via WalletConnect
+// ========================
+
+export async function sendBTCViaWC(fromAddress, toAddress, amount) {
+  if (!provider || !session) throw new Error('WalletConnect not connected.');
+
+  const sats = Math.round(parseFloat(amount) * 100000000).toString();
+
+  const result = await provider.request({
+    method: 'sendTransfer',
+    params: {
+      account: fromAddress,
+      recipientAddress: toAddress,
+      amount: sats,
+      memo: 'CryptoBank transfer',
+    },
+  }, `bip122:000000000019d6689c085ae165831e93`);
+
+  if (!result?.txid) {
+    throw new Error('BTC transaction failed');
+  }
+
+  return { hash: result.txid, from: fromAddress };
 }
 
 // ========================

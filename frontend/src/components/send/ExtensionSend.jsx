@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { HiLightningBolt, HiCheckCircle } from 'react-icons/hi';
 import {
   connectWalletConnect, getConnectedAccounts, isConnected,
-  sendETHViaWC, sendTRONViaWC,
+  sendETHViaWC, sendTRONViaWC, sendBTCViaWC,
   connectETHExtension, connectTronLinkExtension, connectBTCExtension,
   sendETHViaExtension, sendTRONViaExtension, sendBTCViaExtension,
   isETHWalletInstalled, isTronLinkInstalled, isBTCWalletInstalled,
@@ -69,7 +69,7 @@ export default function ExtensionSend({ currency, onSuccess, onError }) {
         // Send via WalletConnect session
         if (currency === 'ETH') result = await sendETHViaWC(recipient, amount);
         else if (currency === 'TRON') result = await sendTRONViaWC(address, recipient, amount);
-        else throw new Error(`WalletConnect send not supported for ${currency} yet.`);
+        else if (currency === 'BTC') result = await sendBTCViaWC(address, recipient, amount);
       } else {
         // Send via browser extension
         if (currency === 'ETH') result = await sendETHViaExtension(recipient, amount);
@@ -94,12 +94,10 @@ export default function ExtensionSend({ currency, onSuccess, onError }) {
         <p className="method-desc">Connect via WalletConnect (any mobile wallet) or a browser extension.</p>
 
         <div className="method-buttons">
-          {/* WalletConnect — always available for ETH and TRON */}
-          {(currency === 'ETH' || currency === 'TRON') && (
-            <button className="btn connect-btn walletconnect-btn" onClick={connectViaWC}>
-              <span>📱</span> WalletConnect ({currency})
-            </button>
-          )}
+          {/* WalletConnect — available for ETH, TRON, and BTC */}
+          <button className="btn connect-btn walletconnect-btn" onClick={connectViaWC}>
+            <span>📱</span> WalletConnect ({currency})
+          </button>
 
           {/* Browser extensions */}
           {currency === 'ETH' && isETHWalletInstalled() && (
@@ -123,7 +121,7 @@ export default function ExtensionSend({ currency, onSuccess, onError }) {
             <p className="method-unavailable">No TronLink extension? Use WalletConnect above.</p>
           )}
           {currency === 'BTC' && !isBTCWalletInstalled() && (
-            <p className="method-unavailable">BTC requires UniSat or Xverse extension. Use the Private Key or Payment QR tab instead.</p>
+            <p className="method-unavailable">No UniSat/Xverse extension? Use WalletConnect above.</p>
           )}
         </div>
       </div>
