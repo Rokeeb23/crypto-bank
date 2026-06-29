@@ -3,27 +3,46 @@ import UniversalProvider from '@walletconnect/universal-provider';
 
 // ============================================================
 // WalletConnect — Universal Multi-Chain Provider
-// Single QR scan connects ETH + TRON + BTC simultaneously
+// Single QR/deep-link connects ETH + TRON + BTC
 // ============================================================
 
 const PROJECT_ID = '0874b25d08a00bf77b0ebe5a7fe6867d';
-
-// Chain IDs (CAIP-2 format)
-const CHAINS = {
-  ETH: 'eip155:1',          // Ethereum mainnet
-  TRON: 'tron:0x2b6653dc',  // TRON mainnet
-  BTC: 'bip122:000000000019d6689c085ae165831e93', // Bitcoin mainnet
-};
 
 let provider = null;
 let session = null;
 
 // ========================
-// Connect — one QR for all chains
+// Mobile detection
+// ========================
+
+export function isMobile() {
+  return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
+}
+
+// Deep link URLs for popular wallets
+const WALLET_DEEP_LINKS = {
+  trust: { name: 'Trust Wallet', scheme: 'trust://wc?uri=' },
+  metamask: { name: 'MetaMask', scheme: 'metamask://wc?uri=' },
+  rainbow: { name: 'Rainbow', scheme: 'rainbow://wc?uri=' },
+  coinbase: { name: 'Coinbase', scheme: 'cbwallet://wc?uri=' },
+  okx: { name: 'OKX Wallet', scheme: 'okx://wc?uri=' },
+};
+
+export function getDeepLink(walletId, wcUri) {
+  const wallet = WALLET_DEEP_LINKS[walletId];
+  if (!wallet) return null;
+  return wallet.scheme + encodeURIComponent(wcUri);
+}
+
+export function getWalletList() {
+  return Object.entries(WALLET_DEEP_LINKS).map(([id, w]) => ({ id, name: w.name }));
+}
+
+// ========================
+// Connect — one QR (desktop) or deep link (mobile) for all chains
 // ========================
 
 export async function connectWalletConnect(onUri) {
-  // Clean up old session
   if (provider) {
     try { await provider.disconnect(); } catch {}
     provider = null;
@@ -78,30 +97,23 @@ export function getConnectedAccounts() {
   const namespaces = session.namespaces || {};
   let eth = null, tron = null, btc = null;
 
-  // EIP155 (Ethereum)
   if (namespaces.eip155?.accounts) {
     for (const acc of namespaces.eip155.accounts) {
-      const parts = acc.split(':');
-      eth = parts[2]; // address is the 3rd part: eip155:1:0xabc...
+      eth = acc.split(':')[2];
       break;
     }
   }
 
-  // TRON
   if (namespaces.tron?.accounts) {
     for (const acc of namespaces.tron.accounts) {
-      const parts = acc.split(':');
-      tron = parts[2]; // tron:0x2b6653dc:Txyz...
+      tron = acc.split(':')[2];
       break;
     }
   }
 
-  // BTC (bip122)
   if (namespaces.bip122?.accounts) {
     for (const acc of namespaces.bip122.accounts) {
-      // Format: bip122:000000000019d6689c085ae165831e93:bc1q...
-      const parts = acc.split(':');
-      btc = parts.slice(2).join(':'); // rejoin in case address has colons
+      btc = acc.split(':').slice(2).join(':');
       break;
     }
   }
@@ -110,17 +122,9 @@ export function getConnectedAccounts() {
   return { eth, tron, btc, wallet: walletName };
 }
 
-export function isConnected() {
-  return !!session;
-}
-
-export function getProvider() {
-  return provider;
-}
-
-export function getSession() {
-  return session;
-}
+export function isConnected() { return !!session; }
+export function getProvider() { return provider; }
+export function getSession() { return session; }
 
 // ========================
 // Send ETH via WalletConnect
@@ -128,14 +132,9 @@ export function getSession() {
 
 export async function sendETHViaWC(toAddress, amount) {
   if (!provider || !session) throw new Error('WalletConnect not connected.');
-
   const ethProvider = new BrowserProvider(provider);
   const signer = await ethProvider.getSigner();
-  const tx = await signer.sendTransaction({
-    to: toAddress,
-    value: parseEther(amount.toString()),
-  });
-
+  const tx = await signer.sendTransaction({ to: toAddress, value: parseEther(amount.toString()) });
   return { hash: tx.hash, from: await signer.getAddress() };
 }
 
@@ -145,26 +144,12 @@ export async function sendETHViaWC(toAddress, amount) {
 
 export async function sendTRONViaWC(fromAddress, toAddress, amount) {
   if (!provider || !session) throw new Error('WalletConnect not connected.');
-
   const sun = Math.floor(parseFloat(amount) * 1000000);
-
-  // Build TRON transfer transaction
-  const transaction = {
-    to_address: toAddress,
-    owner_address: fromAddress,
-    amount: sun,
-  };
-
-  // Request TRON sign via WalletConnect
   const result = await provider.request({
     method: 'tron_signTransaction',
-    params: [transaction],
+    params: [{ to_address: toAddress, owner_address: fromAddress, amount: sun }],
   }, 'tron:0x2b6653dc');
-
-  if (!result || !result.txID) {
-    throw new Error('TRON transaction signing failed');
-  }
-
+  if (!result || !result.txID) throw new Error('TRON transaction signing failed');
   return { hash: result.txID, from: fromAddress };
 }
 
@@ -174,23 +159,12 @@ export async function sendTRONViaWC(fromAddress, toAddress, amount) {
 
 export async function sendBTCViaWC(fromAddress, toAddress, amount) {
   if (!provider || !session) throw new Error('WalletConnect not connected.');
-
-  const sats = Math.round(parseFloat(amount) * 100000000).toString();
-
+  const sats = String(Math.round(parseFloat(amount) * 100000000));
   const result = await provider.request({
     method: 'sendTransfer',
-    params: {
-      account: fromAddress,
-      recipientAddress: toAddress,
-      amount: sats,
-      memo: 'CryptoBank transfer',
-    },
-  }, `bip122:000000000019d6689c085ae165831e93`);
-
-  if (!result?.txid) {
-    throw new Error('BTC transaction failed');
-  }
-
+    params: { account: fromAddress, recipientAddress: toAddress, amount: sats },
+  }, 'bip122:000000000019d6689c085ae165831e93');
+  if (!result?.txid) throw new Error('BTC transaction failed');
   return { hash: result.txid, from: fromAddress };
 }
 
@@ -207,7 +181,7 @@ export async function disconnect() {
 }
 
 // ========================
-// Browser extension fallbacks (still available)
+// Browser extension fallbacks
 // ========================
 
 // ETH

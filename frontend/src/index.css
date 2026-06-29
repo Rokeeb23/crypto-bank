@@ -1431,6 +1431,57 @@ body {
   background: linear-gradient(135deg, #d97706, #b45309);
 }
 
+/* Mobile Wallet Deep Links */
+.wallet-deeplinks {
+  padding: 8px 0;
+}
+
+.wallet-link-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 14px 18px;
+  margin-bottom: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.wallet-link-btn:hover {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: var(--primary);
+}
+
+.deeplink-divider {
+  text-align: center;
+  margin: 16px 0;
+  position: relative;
+}
+
+.deeplink-divider::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--border);
+}
+
+.deeplink-divider span {
+  background: var(--bg-card);
+  padding: 0 12px;
+  position: relative;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 /* Detection Status */
 .detect-status {
   display: flex;
