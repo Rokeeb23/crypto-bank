@@ -19,19 +19,20 @@ export function isMobile() {
   return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile|WPDesktop/i.test(navigator.userAgent);
 }
 
-// Deep link URLs for popular wallets
+// Universal deep links — work on both iOS and Android
 const WALLET_DEEP_LINKS = {
-  trust: { name: 'Trust Wallet', scheme: 'trust://wc?uri=' },
-  metamask: { name: 'MetaMask', scheme: 'metamask://wc?uri=' },
-  rainbow: { name: 'Rainbow', scheme: 'rainbow://wc?uri=' },
-  coinbase: { name: 'Coinbase', scheme: 'cbwallet://wc?uri=' },
-  okx: { name: 'OKX Wallet', scheme: 'okx://wc?uri=' },
+  trust:    { name: 'Trust Wallet',    url: 'https://link.trustwallet.com/wc?uri=' },
+  metamask: { name: 'MetaMask',        url: 'https://metamask.app.link/wc?uri=' },
+  rainbow:  { name: 'Rainbow',         url: 'https://rnbwapp.com/wc?uri=' },
+  coinbase: { name: 'Coinbase Wallet', url: 'https://go.cb-w.com/wc?uri=' },
+  okx:      { name: 'OKX Wallet',      url: 'https://www.okx.com/download?deeplink=' + encodeURIComponent('okx://main/wc?uri=') },
 };
 
 export function getDeepLink(walletId, wcUri) {
   const wallet = WALLET_DEEP_LINKS[walletId];
   if (!wallet) return null;
-  return wallet.scheme + encodeURIComponent(wcUri);
+  if (walletId === 'okx') return wallet.url + encodeURIComponent(wcUri);
+  return wallet.url + encodeURIComponent(wcUri);
 }
 
 export function getWalletList() {
@@ -55,7 +56,7 @@ export async function connectWalletConnect(onUri) {
       name: 'CryptoBank',
       description: 'Multi-chain crypto transactions',
       url: window.location.origin,
-      icons: [],
+      icons: ['https://tfvvp93t-5173.uks1.devtunnels.ms/favicon.svg'],
     },
   });
 
